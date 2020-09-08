@@ -522,6 +522,8 @@ def print_coord(atomnames, xyzarr):
         print('{:<4s}\t{:>11.5f}\t{:>11.5f}\t{:>11.5f}'.format(atomnames[i], xyzarr[i][0], xyzarr[i][1], xyzarr[i][2]))
 
 
+
+
 def get_nac(file,natoms):
     SYMB=[]
     NAC=[]
@@ -589,17 +591,128 @@ def get_nac(file,natoms):
                     NAC.append(z)
                     c2=c2+1
                 if c2 == natoms:
-                    break
+                    flag=False
     
     log.close()
     GEO=np.array(GEO).reshape(-1,3)
     NAC=np.array(NAC).reshape(-1,3)
     CSF=np.array(CSF).reshape(-1,3)    
-    return SYMB, GEO, NAC, CSF, energy
+    return SYMB, GEO, NAC, CSF, energy   
 
 
-
+def get_nac1D(file,natoms):
+    SUMNAC=[]
+    NAC=[]
+    R=[]
     
+    data = re.compile(r'\s(\S+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)')
+    flag=False
+    RASSCF=False
+    c1=0
+    c2=0
+    with open(file, "r") as log:
+        for line in log:
+            
+
+            if line.startswith("      Header of the ONEINT file:"):
+                RASSCF=True
+            if RASSCF:
+                if data.search(line):
+                    z = float(data.search(line).group(4) ) # Get the Z Coordinate
+                    c1=c1+1
+                if c1 == natoms:
+                    R.append(z)
+                    RASSCF=False
+                    c1=0
+                
+            if line.startswith(" *              Total derivative coupling              *"):
+                flag=True
+
+            if flag:
+                if data.search(line):
+                    x = float(data.search(line).group(2) ) # Get the X Coordinate
+                    NAC.append(x)
+                    y = float(data.search(line).group(3) ) # Get the Y Coordinate
+                    NAC.append(y)
+                    z = float(data.search(line).group(4) ) # Get the Z Coordinate
+                    NAC.append(z)
+                    c2=c2+1
+                if c2 == natoms:
+                    flag=False
+                    c2=0
+                    SUMNAC.append(np.sum(NAC))
+                    NAC=[]
+                    
+    
+    log.close()
+    #NAC=np.array(NAC).reshape(-1,3)
+    return R, SUMNAC
+
+
+def get_dqv(file,natoms):
+    R=[]
+    E=[]
+    DC=[]
+    
+    data = re.compile(r'\s(\S+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)')
+    dq = re.compile(r'\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)')
+
+    RASSCF=False
+    coef=False
+    hamil=False
+    
+    c1=0
+    c2=0
+    c3=0
+    with open(file, "r") as log:
+        for line in log:
+            
+            if line.startswith("      Header of the ONEINT file:"):
+                RASSCF=True
+            if RASSCF:
+                if data.search(line):
+                    z = float(data.search(line).group(4) ) # Get the Z Coordinate
+                    c1=c1+1
+                    if c1 == natoms:
+                        R.append(z)
+                        RASSCF=False
+                        c1=0
+
+            if line.startswith("  Diabatic Coefficients "):
+                coef=True
+
+            if coef:
+                if dq.search(line):
+                    x = float(dq.search(line).group(1) ) # Get the X Coordinate
+                    DC.append(x)
+                    y = float(dq.search(line).group(2) ) # Get the Y Coordinate
+                    DC.append(y)
+                    
+                    c2=c2+1
+                if c2 == natoms:
+                     coef=False
+                     c2=0
+                     
+            if line.startswith("  Diabatic Hamiltonian  "):
+                hamil=True
+
+            if hamil:
+                if dq.search(line):
+                    x = float(dq.search(line).group(1) ) # Get the X Coordinate
+                    E.append(x)
+                    y = float(dq.search(line).group(2) ) # Get the Y Coordinate
+                    E.append(y)
+                    
+                    c3=c3+1
+                if c3 == natoms:
+                     hamil=False
+                     c3=0
+    
+    log.close()
+    DC=np.array(DC).reshape(-1,4)
+    E=np.array(E).reshape(-1,4)
+    
+    return R, E, DC  
 
 
 
@@ -614,7 +727,7 @@ def main():
     f.add_option('--get', action="store_true", default=False, help='Get the PES from OpenMolcas')
     f.add_option('--get_nm', action="store_true", default=False, help='Stuff')
     f.add_option('--getnac', action="store_true", default=False, help='Get the Non-adiabatic coupling vectors from OpenMolcas')
-    f.add_option('--getnac1', action="store_true", default=False, help='Non-adiabatic coupling vectors from SINGLE OpenMolcas log file')
+    f.add_option('--getnac1d', action="store_true", default=False, help='Non-adiabatic coupling vectors from SINGLE OpenMolcas log file')
     f.add_option('--getdqv', action="store_true", default=False, help='Get Diabatic potentials and coupling from DQV method on OpenMolcas')
     # Get Z-matrix Coordinates
     f.add_option('-z', '--zmat', type = str, default = None, help='Give the Zmat structure')
@@ -969,19 +1082,27 @@ def main():
                 i=i+1
                 print(' ')
 
-    elif arg.getnac1 == True:
+    elif arg.getnac1d == True:
         
-        
-        dgdq=2.41719
-        symb,geoxyz,nacxyz,fcsf,energy=get_nac(arg.log, arg.natoms)
-        print(np.sum(nacxyz*dgdq))
-        
+        natoms=2
+        R,SNAC=get_nac1D(arg.log,natoms)
+
+        for i in range(len(R)):
+            print(R[i], abs(SNAC[i]))
 
     elif arg.getdqv  == True:
         
-        if arg.log == True:
-            print("YES")
+        if arg.log:
+            natoms=2
+            R, E, DC = get_dqv(arg.log, natoms)
 
+            for i in range(len(R)):
+                print(R[i], E[i][0], E[i][3])
+                #print(R[i], abs(DC[i][1]))
+
+
+
+                
         else:
             print("Not implemented yet")
             sys.exit(1)
