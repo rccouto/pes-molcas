@@ -604,12 +604,16 @@ def get_nac1D(file,natoms):
     SUMNAC=[]
     NAC=[]
     R=[]
+    CSF=[]
+    hAB=[]
     
     data = re.compile(r'\s(\S+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)')
     flag=False
     RASSCF=False
+    flagCSF=False
     c1=0
     c2=0
+    c3=0
     with open(file, "r") as log:
         for line in log:
             
@@ -624,10 +628,29 @@ def get_nac1D(file,natoms):
                     R.append(z)
                     RASSCF=False
                     c1=0
-                
+
+            if line.startswith(" *              CSF derivative coupling               *"):
+                flagCSF=True
+            if flagCSF:
+                if data.search(line):
+                    x = float(data.search(line).group(2) ) # Get the X Coordinate
+                    CSF.append(x)
+                    y = float(data.search(line).group(3) ) # Get the Y Coordinate
+                    CSF.append(y)
+                    z = float(data.search(line).group(4) ) # Get the Z Coordinate
+                    CSF.append(z)
+                    c3=c3+1
+                if c3 == natoms:
+                    flagCSF=False
+                    c3=0
+
+            if re.search(r"Energy difference:", line) is not None: # Find energy in .log
+                words = line.split()
+                e = float( words[2] )  # Energy is the sixth word
+                #energy.append(e)
+                    
             if line.startswith(" *              Total derivative coupling              *"):
                 flag=True
-
             if flag:
                 if data.search(line):
                     x = float(data.search(line).group(2) ) # Get the X Coordinate
@@ -641,12 +664,19 @@ def get_nac1D(file,natoms):
                     flag=False
                     c2=0
                     SUMNAC.append(np.sum(NAC))
+
+                    NAC=np.array(NAC).reshape(-1,3)
+                    CSF=np.array(CSF).reshape(-1,3)
+                    h=(NAC-CSF)*e
+                    hAB.append(np.sum(h))
+                    
                     NAC=[]
+                    CSF=[]
                     
     
     log.close()
     #NAC=np.array(NAC).reshape(-1,3)
-    return R, SUMNAC
+    return R, SUMNAC, hAB
 
 
 def get_dqv(file,natoms):
@@ -714,6 +744,83 @@ def get_dqv(file,natoms):
     
     return R, E, DC  
 
+def get_nacme_molpro(file,natoms):
+    SUMNAC=[]
+    NAC=[]
+    R=[]
+    E1=[]
+    E2=[]
+    
+    data = re.compile(r'\s(\d+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)')
+    flag=False
+    c1=0
+    c2=0
+    with open(file, "r") as log:
+        for line in log:
+
+
+            if re.search(r" SETTING RLIF           =", line) is not None: # Find energy in .log
+                words = line.split()
+                r = float( words[3] )  # Energy is the sixth word
+                R.append(r)            
+
+            if re.search(r" !MCSCF STATE  1.1 Energy", line) is not None: # Find energy in .log
+                words = line.split()
+                e = float( words[4] )  # Energy is the sixth word
+                E1.append(e)
+
+            if re.search(r" !MCSCF STATE  2.1 Energy", line) is not None: # Find energy in .log
+                words = line.split()
+                e = float( words[4] )  # Energy is the sixth word
+                E2.append(e)
+                
+            if line.startswith(" SA-MC NACME FOR STATES 1.1 - 2.1"):
+                flag=True
+
+            if flag:
+                if data.search(line):
+                    x = float(data.search(line).group(2) ) # Get the X Coordinate
+                    NAC.append(x)
+                    y = float(data.search(line).group(3) ) # Get the Y Coordinate
+                    NAC.append(y)
+                    z = float(data.search(line).group(4) ) # Get the Z Coordinate
+                    NAC.append(z)
+                    c2=c2+1
+                if c2 == natoms:
+                    flag=False
+                    c2=0
+                    SUMNAC.append(np.sum(NAC))
+                    NAC=[]
+                    
+    
+    log.close()
+    #NAC=np.array(NAC).reshape(-1,3)
+    return R, SUMNAC, E1, E2
+
+def get_dipole(file):
+    O=[]
+    data = re.compile(r'(\d+)\s+(\d+)\s+(\d+\.\d*(?:[Ee]-?\d+)?)\s+(\d+\.\d*(?:[Ee]-?\d+)?)\s+(\d+\.\d*(?:[Ee]-?\d+)?)\s+(\d+\.\d*(?:[Ee]-?\d+)?)')
+    flag=False
+    with open(file, "r") as log:
+        for line in log:
+            if line.startswith("++ Dipole transition vectors (spin-free states):"):
+                flag=True
+            if flag:
+                if data.search(line):
+                    if data.search(line):
+                        i = float(data.search(line).group(1))   # initial state
+                        O.append(i)
+                        f = float(data.search(line).group(2))   # final state
+                        O.append(f)
+                        osc = float(data.search(line).group(3)) # oscillator strength
+                        O.append(osc)
+                if line.startswith("++ Velocity transition strengths (spin-free states):"):
+                    break
+    log.close()
+    states=np.array(O).reshape(-1,3)
+    return states
+
+
 
 
 # MAIN PROGRAM
@@ -729,6 +836,8 @@ def main():
     f.add_option('--getnac', action="store_true", default=False, help='Get the Non-adiabatic coupling vectors from OpenMolcas')
     f.add_option('--getnac1d', action="store_true", default=False, help='Non-adiabatic coupling vectors from SINGLE OpenMolcas log file')
     f.add_option('--getdqv', action="store_true", default=False, help='Get Diabatic potentials and coupling from DQV method on OpenMolcas')
+    f.add_option('--getnacme', action="store_true", default=False, help='Get Non-Adiabatic Coupling Matrix from Molpro')
+    
     # Get Z-matrix Coordinates
     f.add_option('-z', '--zmat', type = str, default = None, help='Give the Zmat structure')
     # Get Normal Coordinates
@@ -1082,31 +1191,78 @@ def main():
                 i=i+1
                 print(' ')
 
+    # GET NACME FROM OPENMOLCAS 
     elif arg.getnac1d == True:
         
         natoms=2
-        R,SNAC=get_nac1D(arg.log,natoms)
+        R,SNAC,hAB=get_nac1D(arg.log,natoms)
 
         for i in range(len(R)):
-            print(R[i], abs(SNAC[i]))
+            #print(R[i], abs(SNAC[i]))
+            print(R[i], abs(hAB[i]))
+            
+    # GET NACMEs AND PEC FROM MOLPRO OUTPUT FOR DIATOMIC MOLECULES
+    elif arg.getnacme == True:
+        natoms=2
+        R, NACME, E1, E2 = get_nacme_molpro(arg.log, natoms)
 
+        #print("# MOLPRO NACME")
+        for i in range(len(R)):
+            print(R[i], abs(NACME[i]))
+            
+        #print("# MOLPRO PECs")
+        #for i in range(len(R)):
+        #    print(R[i], E1[i], E2[i])
+
+
+    # GET QDV RESULTS FROM OPENMOLCAS 
     elif arg.getdqv  == True:
         
         if arg.log:
+            log=arg.log
             natoms=2
-            R, E, DC = get_dqv(arg.log, natoms)
+            R, E, DC = get_dqv(log, natoms)
 
+            pot=log.replace(".log", "-diab.pes.dat")
+            
+
+            out=open(pot,"w")
+            out.write("# QDV potentials \n")
             for i in range(len(R)):
-                print(R[i], E[i][0], E[i][3])
-                #print(R[i], abs(DC[i][1]))
+                out.write("%.4s %.16s %.16s \n" % (R[i], E[i][0], E[i][3]))
+            out.close()
+            
+            coup=log.replace(".log", "-diab.coup.dat")
+            out=open(coup,"w")
+            out.write("# QDV Couplings elements U12 \n")    
+            for i in range(len(R)):   
+                out.write("%.4s %.16s \n" % (R[i], abs(DC[i][1])))
+            out.close()
 
-
+        elif arg.td:
+            files=sorted(glob.iglob('*.log'))
 
                 
         else:
-            print("Not implemented yet")
-            sys.exit(1)
-           
+            files=sorted(glob.iglob('*.log'))
+            for log in files:
+                natoms=2
+                R, E, DC = get_dqv(log, natoms)
+
+                pot=log.replace(".log", "-diab.pes.dat")
+
+                out=open(pot,"w")
+                out.write("# QDV potentials \n")
+                for i in range(len(R)):
+                    out.write("%.4s %.16s %.16s \n" % (R[i], E[i][0], E[i][3]))
+                out.close()
+            
+                coup=log.replace(".log", "-diab.coup.dat")
+                out=open(coup,"w")
+                out.write("# QDV Couplings elements U12 \n")    
+                for i in range(len(R)):   
+                    out.write("%.4s %.16s \n" % (R[i], abs(DC[i][1])))
+                out.close()
 
 
 if __name__=="__main__":
