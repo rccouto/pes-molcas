@@ -283,6 +283,32 @@ def generate_coord(Coord,NM,Q):
 # Set the Input Name
 def InputName(file, i, j):
     if j == None:
+        if i > 9:
+            var = "-%s.input" % i
+        else:
+            var = "-0%s.input" % i
+
+    else:
+        if i > 9 and j > 9:
+            var = "-%s.%s.input" % (i,j)
+            
+        elif i > 9 and j < 10:
+            var = "-%s.0%s.input" % (i,j)
+            
+        elif i < 10 and j > 9:
+            var = "-0%s.%s.input" % (i,j)
+        
+        else:
+            var = "-0%s.0%s.input" % (i,j)
+    
+    input=file.rsplit( ".", 1 )[ 0 ] + var
+    
+    return input
+
+
+# Set the Input Name
+def OldInputName(file, i, j):
+    if j == None:
         if i > 99:
             var = "-%s.input" % i
         elif i > 9:
@@ -315,7 +341,6 @@ def InputName(file, i, j):
     input=file.rsplit( ".", 1 )[ 0 ] + var
     
     return input
-
 
 
 # Write Input File
@@ -901,6 +926,7 @@ def main():
     f.add_option('--log' , type = str, default = None, help='OpenMolcas log file')
     f.add_option('--atm1' , type = str, default = None, help='Atom 1 for 1D potential ')
     f.add_option('--job' , type = str, default = None, help='Job file name ')
+    f.add_option('--oldname' , action="store_true", default=False, help='Old naming for Input files ')
     
     (arg, args) = f.parse_args(sys.argv[1:])
 
@@ -1008,8 +1034,12 @@ def main():
                             job = arg.job
                         else:
                             job = file
+
+                        if arg.oldname == True or arg.N > 99:
+                            input=OldInputName(job,i,j)
+                        else:
+                            input=InputName(job,i,j)
                             
-                        input=InputName(job,i,j)
                         WriteInput(input, arg.bs, atomnames, TdXYZ, arg.sym, Q[i], Q2[j])
                 
                         job=input.replace(".input", ".sh")
@@ -1032,8 +1062,12 @@ def main():
                         job = arg.job
                     else:
                         job = file
-                        
-                    input=InputName(job,i,None)
+
+                    if arg.oldname == True or arg.N > 99:
+                        input=OldInputName(job,i,None)
+                    else:
+                        input=InputName(job,i,None)
+                    
                     WriteInput(input, arg.bs, atomnames, NewXYZ, arg.sym, Q[i], None)
                 
                     job=input.replace(".input", ".sh")
