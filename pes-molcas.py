@@ -472,18 +472,16 @@ def get_energy(level, nroots):
     return E
 
 
-def get_2D_Q():
+def get_2D_Q(log):
     Q1=[]
     Q2=[]
-    files=sorted(glob.iglob('*.log')) 
-    for file in files:
-        for i in open( file ).readlines():
-            if re.search(r"Title = ", i) is not None:
-                words = i.split()
-                q1 = str( words[3] ) 
-                q2 = str( words[5] )
-                Q1.append(q1)
-                Q2.append(q2)
+    for i in open( log ).readlines():
+        if re.search(r"Title = ", i) is not None:
+            words = i.split()
+            q1 = str( words[3] ) 
+            q2 = str( words[5] )
+            Q1.append(q1)
+            Q2.append(q2)
     return Q1, Q2
 
 def get_1D_Q():
@@ -679,10 +677,12 @@ def get_nac1D(file,natoms):
     return R, SUMNAC, hAB
 
 
-def get_dqv(file,natoms):
+def get_dqv(file,natoms,nD):
     R=[]
     E=[]
     DC=[]
+    Q1=[]
+    Q2=[]
     
     data = re.compile(r'\s(\S+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)')
     dq = re.compile(r'\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)')
@@ -696,17 +696,32 @@ def get_dqv(file,natoms):
     c3=0
     with open(file, "r") as log:
         for line in log:
-            
-            if line.startswith("      Header of the ONEINT file:"):
-                RASSCF=True
-            if RASSCF:
-                if data.search(line):
-                    z = float(data.search(line).group(4) ) # Get the Z Coordinate
-                    c1=c1+1
+
+            if nD == "diatomic":
+                if line.startswith("      Header of the ONEINT file:"):
+                    RASSCF=True
+                if RASSCF:
+                    if data.search(line):
+                        z = float(data.search(line).group(4) ) # Get the Z Coordinate
+                        c1=c1+1
                     if c1 == natoms:
                         R.append(z)
                         RASSCF=False
                         c1=0
+
+            elif nD == 1:
+                if re.search(r"Title = ", line) is not None:
+                    words = line.split()
+                    q1 = float( words[3] ) 
+                    Q1.append(q1)
+                    
+            elif nD == 2:
+                if re.search(r"Title = ", line) is not None:
+                    words = line.split()
+                    q1 = float( words[3] ) 
+                    q2 = float( words[5] )
+                    Q1.append(q1)
+                    Q2.append(q2)
 
             if line.startswith("  Diabatic Coefficients "):
                 coef=True
@@ -741,8 +756,14 @@ def get_dqv(file,natoms):
     log.close()
     DC=np.array(DC).reshape(-1,4)
     E=np.array(E).reshape(-1,4)
+    Q1=np.array(Q1)
+    Q2=np.array(Q2)
     
-    return R, E, DC  
+    return R, Q1, Q2, E, DC, 
+
+
+
+
 
 def get_nacme_molpro(file,natoms):
     SUMNAC=[]
@@ -799,26 +820,26 @@ def get_nacme_molpro(file,natoms):
 
 def get_dipole(file):
     O=[]
-    data = re.compile(r'(\d+)\s+(\d+)\s+(\d+\.\d*(?:[Ee]-?\d+)?)\s+(\d+\.\d*(?:[Ee]-?\d+)?)\s+(\d+\.\d*(?:[Ee]-?\d+)?)\s+(\d+\.\d*(?:[Ee]-?\d+)?)')
+    data = re.compile(r'(\d+)\s+(\d+)\s+([+-]?\d+\.\d*(?:[Ee]-?\d+)?)\s+([+-]?\d+\.\d*(?:[Ee]-?\d+)?)')
+    #data = re.compile(r'(\d+)\s+(\d+)\s+(-?\d+\.\d*(?:[Ee]-?\d+)?)\s+(-?\d+\.\d*(?:[Ee]-?\d+)?)\s+(-?\d+\.\d*(?:[Ee]-?\d+)?)\s+(-?\d+\.\d*(?:[Ee]-?\d+)?)')
     flag=False
     with open(file, "r") as log:
         for line in log:
             if line.startswith("++ Dipole transition vectors (spin-free states):"):
                 flag=True
             if flag:
-                if data.search(line):
-                    if data.search(line):
-                        i = float(data.search(line).group(1))   # initial state
-                        O.append(i)
-                        f = float(data.search(line).group(2))   # final state
-                        O.append(f)
-                        osc = float(data.search(line).group(3)) # oscillator strength
-                        O.append(osc)
+                #if data.search(line):
+                if line.startswith("         1    2"):
+                    words = line.split()
+                    osc = float( words[5] )  # Energy is the sixth word
+                    O.append(osc)
                 if line.startswith("++ Velocity transition strengths (spin-free states):"):
-                    break
+                    flag=False
     log.close()
-    states=np.array(O).reshape(-1,3)
-    return states
+    if not O:
+        O.append(0.0)
+    #states=np.array(O).reshape(-1,3)
+    return O
 
 
 
@@ -828,7 +849,7 @@ def main():
     import sys
     f = optparse.OptionParser(usage="usage: %prog [options] filename")
     # Get Type of Run
-    f.add_option('--zmatrix', action="store_true", default=False, help='Generate PES using Z-matrix coordinates')
+    f.add_option('--zmatrix', action="store_true", default=False, help='Generate PES using Z-atrix coordinates')
     f.add_option('--xyz', action="store_true", default=False, help='Generate PES using cartesian XYZ coordinates')
     f.add_option('--proj', action="store_true", default=False, help='Projection onto normal modes')
     f.add_option('--get', action="store_true", default=False, help='Get the PES from OpenMolcas')
@@ -873,12 +894,14 @@ def main():
     # Level of calculation
     f.add_option( '-l', '--level' , type = str, default = None, help='Level of calculation to get results, i.e., RASSCF, CASPT2...')
     f.add_option('--diff', action="store_true", default=False, help='Compute the difference between two structures (use --proj )')
-    f.add_option('--sum', action="store_true", default=False, help='Add the NM projection to the equilibrium geomtry (use --proj )')
+    f.add_option('--sum', action="store_true", default=False, help='Add the NM projection to the equilibrium omtry (use --proj )')
     f.add_option('--rotate', action="store_true", default=False, help='Generate PES using cartesian XYZ coordinates')
     f.add_option('--td', action="store_true", default=False, help='2D PES calculation')
     f.add_option('--natoms', type = int, default = None, help='Number of atoms in molecule')
     f.add_option('--log' , type = str, default = None, help='OpenMolcas log file')
     f.add_option('--atm1' , type = str, default = None, help='Atom 1 for 1D potential ')
+    f.add_option('--job' , type = str, default = None, help='Job file name ')
+    
     (arg, args) = f.parse_args(sys.argv[1:])
 
     if len(sys.argv) == 1:
@@ -980,7 +1003,13 @@ def main():
                     TdXYZ=generate_coord(NewXYZ, nm2xyz, Q2[j])
                     WriteMovie(inp, atomnames, TdXYZ, Q[i], Q2[j])
                     if arg.movie == False:
-                        input=InputName(file,i,j)
+
+                        if arg.job:
+                            job = arg.job
+                        else:
+                            job = file
+                            
+                        input=InputName(job,i,j)
                         WriteInput(input, arg.bs, atomnames, TdXYZ, arg.sym, Q[i], Q2[j])
                 
                         job=input.replace(".input", ".sh")
@@ -999,7 +1028,12 @@ def main():
                 WriteMovie(inp, atomnames, NewXYZ, Q[i], False)
 
                 if arg.movie == False:
-                    input=InputName(file,i,None)
+                    if arg.job:
+                        job = arg.job
+                    else:
+                        job = file
+                        
+                    input=InputName(job,i,None)
                     WriteInput(input, arg.bs, atomnames, NewXYZ, arg.sym, Q[i], None)
                 
                     job=input.replace(".input", ".sh")
@@ -1198,8 +1232,8 @@ def main():
         R,SNAC,hAB=get_nac1D(arg.log,natoms)
 
         for i in range(len(R)):
-            #print(R[i], abs(SNAC[i]))
-            print(R[i], abs(hAB[i]))
+            print(R[i], abs(1/SNAC[i]))
+            #print(R[i], abs(hAB[i]))
             
     # GET NACMEs AND PEC FROM MOLPRO OUTPUT FOR DIATOMIC MOLECULES
     elif arg.getnacme == True:
@@ -1221,11 +1255,12 @@ def main():
         if arg.log:
             log=arg.log
             natoms=2
-            R, E, DC = get_dqv(log, natoms)
+            nD=diatomic
+            R, Q1, Q2, E, DC = get_dqv(log, natoms,nD)
 
-            pot=log.replace(".log", "-diab.pes.dat")
+            dipole=get_dipole(log)
             
-
+            pot=log.replace(".log", "-diab.pes.dat")
             out=open(pot,"w")
             out.write("# QDV potentials \n")
             for i in range(len(R)):
@@ -1236,34 +1271,100 @@ def main():
             out=open(coup,"w")
             out.write("# QDV Couplings elements U12 \n")    
             for i in range(len(R)):   
-                out.write("%.4s %.16s \n" % (R[i], abs(DC[i][1])))
+                #out.write("%.4s %.16s \n" % (R[i], DC[i][1]**2 ))
+                out.write("%.4s %.16s \n" % (R[i], E[i][1]**2 ))
             out.close()
 
-        elif arg.td:
-            files=sorted(glob.iglob('*.log'))
-
-                
-        else:
-            files=sorted(glob.iglob('*.log'))
-            for log in files:
-                natoms=2
-                R, E, DC = get_dqv(log, natoms)
-
-                pot=log.replace(".log", "-diab.pes.dat")
-
-                out=open(pot,"w")
-                out.write("# QDV potentials \n")
-                for i in range(len(R)):
-                    out.write("%.4s %.16s %.16s \n" % (R[i], E[i][0], E[i][3]))
-                out.close()
+            dip=log.replace(".log", "-dipoles.dat")
+            out=open(dip,"w")
+            out.write("# Transitions dipole moment \n")    
+            for i in range(len(R)):   
+                out.write("%.4s %.16s \n" % (R[i], dipole[i]))
+            out.close()           
             
-                coup=log.replace(".log", "-diab.coup.dat")
-                out=open(coup,"w")
-                out.write("# QDV Couplings elements U12 \n")    
-                for i in range(len(R)):   
-                    out.write("%.4s %.16s \n" % (R[i], abs(DC[i][1])))
-                out.close()
+        elif arg.td:
+            nD = 2
+            natoms = 2
+            files=sorted(glob.iglob('*.log'))
+            q1=0
+            
+            gspot=open("gs-surf.dat", "w")
+            s1pot=open("s1-surf.dat", "w")
+            dcpot=open("dc-surf.dat", "w")
+            tdmpot=open("tdm-surf.dat", "w")
+            
+            for log in files:
+                R,  Q1, Q2, E, DC = get_dqv(log, natoms, nD)
+                TDM=get_dipole(log)
+                
+                if DC.any():
 
+                    if Q1[0] != q1:
+                        gspot.write('\n')
+                        s1pot.write('\n')
+                        dcpot.write('\n')
+                        tdmpot.write('\n')
+                        
+                    gspot.write("%.8s %.8s %.16s \n" % (Q1[0], Q2[0], E[0][0]))
+                    s1pot.write("%.8s %.8s %.16s \n" % (Q1[0], Q2[0], E[0][3]))
+                    dcpot.write("%.8s %.8s %.6E \n " % (Q1[0], Q2[0], abs(1/DC[0][1]) ))
+                    tdmpot.write("%.8s %.8s %.16s \n" % (Q1[0], Q2[0], TDM[0]))
+                    
+                    q1=Q1[0]
+            gspot.close()
+            s1pot.close()
+            dcpot.close()
+            tdmpot.close()
+            
+        else:
+            nD = 1
+            natoms = 4
+            files=sorted(glob.iglob('*.log'))
+            
+            gspot=open("gs-surf.dat", "w")
+            s1pot=open("s1-surf.dat", "w")
+            dcpot=open("dc-surf.dat", "w")
+            tdmpot=open("tdm-surf.dat", "w")
+            
+            for log in files:
+                R,  Q, Q2, E, DC = get_dqv(log, natoms, nD)
+                TDM=get_dipole(log)
+                
+                if DC.any():
+                    gspot.write("%.8s  %.16s \n" % (Q[0], E[0][0]))
+                    s1pot.write("%.8s  %.16s \n" % (Q[0], E[0][3]))
+                    dcpot.write("%.8s  %.6E \n " % (Q[0], abs(1/DC[0][1]) ))
+                    tdmpot.write("%.8s %.16s \n" % (Q[0], TDM[0]))
+                    
+            gspot.close()
+            s1pot.close()
+            dcpot.close()
+            tdmpot.close()
 
+            
+                    
+    elif arg.getdm == True:
+        nD = 2
+        natoms = 2
+        files=sorted(glob.iglob('*.log'))
+        q1=0
+        
+        tdmpot=open("tdm-surf.dat", "w")
+        
+        for log in files:
+            Q1, Q2 = get_dqv()
+            
+            TDM=get_dipole(log)
+        
+            if DC.any():
+
+                if Q1[0] != q1:
+                    tdmpot.write('\n')
+                    
+                    tdmpot.write("%.8s %.8s %.16s \n" % (Q1[0], Q2[0], TDM[0]))
+                    
+                    q1=Q1[0]
+                tdmpot.close()
+                    
 if __name__=="__main__":
     main()
