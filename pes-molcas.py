@@ -428,13 +428,32 @@ def WriteInput(input, bs, symb, NewCoord, sym, Q, Q2):
         if j == (len(NewCoord)-1):
             inp.write("End of basis\n")
 
-    inp.write("&SEWARD &END \nEnd of input\n")
+    inp.write("EPOT=0\n&SEWARD &END \nEnd of input\n")
     with open("molcas.input") as fmolcas:
         inp.write(fmolcas.read())
         fmolcas.close()
         inp.close()
             
+# Write Input File
+def WriteXYZ(xyz, symb, NewCoord, Q, Q2):
+    
+    natoms=len(NewCoord)
+    inp = open(xyz, 'w')
+    C=np.array(NewCoord)
+    S=np.array(symb)
+    
+    inp.write("%s       \n" % natoms)
+    if Q2 == None:
+        inp.write("Q: %.6s \n" % Q)
+    else:
+        inp.write("Q1: %.6s  Q2: %.6s \n" % (Q, Q2))
 
+    for i in range(len(NewCoord)):
+        #inp.write(" %s  %12.10s  %12.10s  %12.10s\n" % ( S[i], C[i][0],  C[i][1],  C[i][2] ))
+        inp.write('{:<4s}\t{:>14.10f}\t{:>14.10f}\t{:>14.10f} \n'.format(S[i], C[i][0], C[i][1], C[i][2]))
+    inp.close()
+
+        
 # Write Molecular Movie
 def WriteMovie(inp, symb, NewCoord,Q1, Q2):
     inp.write(" %s \n" % len(NewCoord) )
@@ -444,10 +463,10 @@ def WriteMovie(inp, symb, NewCoord,Q1, Q2):
     else:
         inp.write("Q = %.4s \n" % Q1 )        
         
-    for j in range(len(NewCoord)):
-        inp.write(" %s    %s \n" % (''.join(map(str,symb[j])), '  '.join(map(str,NewCoord[j]))))
-
-
+    for i in range(len(NewCoord)):
+        #inp.write(" %.16s    %.45s \n" % (''.join(map(str,symb[i])), '  '.join(map(str,NewCoord[i]))))
+        #inp.write(" %.16s    %.16s   %.16s   %.16s \n" % (''.join(map(str,symb[i])), NewCoord[i][0], NewCoord[i][1], NewCoord[i][2]  ) )
+        inp.write('{:<4s}\t{:>14.10f}\t{:>14.10f}\t{:>14.10f} \n'.format(symb[i], NewCoord[i][0], NewCoord[i][1], NewCoord[i][2]))
 
 def get_energy(level, nroots):
     E=[]
@@ -509,6 +528,21 @@ def get_2D_Q(log):
             Q2.append(q2)
     return Q1, Q2
 
+def get_Q_2D():
+    Q1=[]
+    Q2=[]
+    files=sorted(glob.iglob('*.log'))
+    for file in files:
+        for i in open( file ).readlines():
+            if re.search(r"Title = ", i) is not None:
+                words = i.split()
+                q1 = str( words[3] ) 
+                q2 = str( words[5] )
+                Q1.append(q1)
+                Q2.append(q2)
+    return Q1, Q2
+
+
 def get_1D_Q():
     Q=[]
     files=sorted(glob.iglob('*.log')) 
@@ -518,8 +552,20 @@ def get_1D_Q():
                 words = i.split()
                 q = str( words[3] ) 
                 Q.append(q)
+                break
     return Q
-                    
+
+
+def get_Q_1D(file):
+    Q=[]
+    for i in open( file ).readlines():
+        if re.search(r"Title = ", i) is not None:
+            words = i.split()
+            q = str( words[3] ) 
+            Q.append(q)
+            break
+    return Q
+
 def project_to_nm(eq, ref, nm, mass):
     
     ceq  = center_structure(eq, mass)
@@ -538,11 +584,11 @@ def transform_mol(xyz, atomnames, mass):
 
     return txyz
 
-def print_coord(atomnames, xyzarr):
+def print_coord(atomnames, xyzarr, title):
     print(len(atomnames))
-    print("Coordinates")
+    print(title)
     for i in range(len(atomnames)):
-        print('{:<4s}\t{:>11.5f}\t{:>11.5f}\t{:>11.5f}'.format(atomnames[i], xyzarr[i][0], xyzarr[i][1], xyzarr[i][2]))
+        print('{:<4s}\t{:>14.10f}\t{:>14.10f}\t{:>14.10f}'.format(atomnames[i], xyzarr[i][0], xyzarr[i][1], xyzarr[i][2]))
 
 
 
@@ -615,12 +661,16 @@ def get_nac(file,natoms):
                     c2=c2+1
                 if c2 == natoms:
                     flag=False
+                    
+            if re.search(r"norm:", line) is not None: # Find energy in .log
+                words = line.split()
+                norm = float( words[1] )  # Energy is the sixth word
     
     log.close()
     GEO=np.array(GEO).reshape(-1,3)
     NAC=np.array(NAC).reshape(-1,3)
     CSF=np.array(CSF).reshape(-1,3)    
-    return SYMB, GEO, NAC, CSF, energy   
+    return SYMB, GEO, NAC, CSF, energy, norm   
 
 
 def get_nac1D(file,natoms):
@@ -708,6 +758,7 @@ def get_dqv(file,natoms,nD):
     DC=[]
     Q1=[]
     Q2=[]
+    W=[]
     
     data = re.compile(r'\s(\S+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)')
     dq = re.compile(r'\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)')
@@ -715,10 +766,12 @@ def get_dqv(file,natoms,nD):
     RASSCF=False
     coef=False
     hamil=False
+    weight=False
     
     c1=0
     c2=0
     c3=0
+    c4=0
     with open(file, "r") as log:
         for line in log:
 
@@ -750,27 +803,38 @@ def get_dqv(file,natoms,nD):
 
             if line.startswith("  Diabatic Coefficients "):
                 coef=True
-
             if coef:
                 if dq.search(line):
-                    x = float(dq.search(line).group(1) ) # Get the X Coordinate
+                    x = float(dq.search(line).group(1) )
                     DC.append(x)
-                    y = float(dq.search(line).group(2) ) # Get the Y Coordinate
+                    y = float(dq.search(line).group(2) )
                     DC.append(y)
-                    
                     c2=c2+1
                 if c2 == natoms:
                      coef=False
                      c2=0
+
+            if line.startswith("  Weights of adiabatic states "):
+                weight=True
+            if weight:
+                if dq.search(line):
+                    x = float(dq.search(line).group(1) ) 
+                    W.append(x)
+                    y = float(dq.search(line).group(2) )
+                    W.append(y)
+                    c4=c4+1
+                if c4 == natoms:
+                     weight=False
+                     c4=0
                      
             if line.startswith("  Diabatic Hamiltonian  "):
                 hamil=True
 
             if hamil:
                 if dq.search(line):
-                    x = float(dq.search(line).group(1) ) # Get the X Coordinate
+                    x = float(dq.search(line).group(1) ) 
                     E.append(x)
-                    y = float(dq.search(line).group(2) ) # Get the Y Coordinate
+                    y = float(dq.search(line).group(2) )
                     E.append(y)
                     
                     c3=c3+1
@@ -779,12 +843,13 @@ def get_dqv(file,natoms,nD):
                      c3=0
     
     log.close()
-    DC=np.array(DC).reshape(-1,4)
+    DC=np.array(DC).reshape(-1,2)
+    W=np.array(W).reshape(-1,4)
     E=np.array(E).reshape(-1,4)
     Q1=np.array(Q1)
     Q2=np.array(Q2)
     
-    return R, Q1, Q2, E, DC, 
+    return R, Q1, Q2, E, DC, W
 
 
 
@@ -844,28 +909,161 @@ def get_nacme_molpro(file,natoms):
     return R, SUMNAC, E1, E2
 
 def get_dipole(file):
-    O=[]
+    
     data = re.compile(r'(\d+)\s+(\d+)\s+([+-]?\d+\.\d*(?:[Ee]-?\d+)?)\s+([+-]?\d+\.\d*(?:[Ee]-?\d+)?)')
     #data = re.compile(r'(\d+)\s+(\d+)\s+(-?\d+\.\d*(?:[Ee]-?\d+)?)\s+(-?\d+\.\d*(?:[Ee]-?\d+)?)\s+(-?\d+\.\d*(?:[Ee]-?\d+)?)\s+(-?\d+\.\d*(?:[Ee]-?\d+)?)')
-    flag=False
+    
+    flagL=False
+    flagV=False
+    flagD=False
+    OL = 0.0
+    DM = 0.0
+    OV = 0.0
+    DX = 0.0
+    DY = 0.0
+    DZ = 0.0
+    E=[]
+    
     with open(file, "r") as log:
         for line in log:
-            if line.startswith("++ Dipole transition vectors (spin-free states):"):
-                flag=True
-            if flag:
-                #if data.search(line):
-                if line.startswith("         1    2"):
-                    words = line.split()
-                    osc = float( words[5] )  # Energy is the sixth word
-                    O.append(osc)
-                if line.startswith("++ Velocity transition strengths (spin-free states):"):
-                    flag=False
-    log.close()
-    if not O:
-        O.append(0.0)
-    #states=np.array(O).reshape(-1,3)
-    return O
 
+            
+            if re.search(r"::    RASSI State ", line) is not None: # Find energy in .log
+                words = line.split()
+                energy = float( words[6] )  # Energy is the sixth word
+                E.append(energy)
+
+            
+            if line.startswith("++ Dipole transition strengths"):
+                flagL=True
+            if flagL:
+                if line.startswith("         1    2") or line.startswith("         2    1"):
+                    words = line.split()
+                    OL = float( words[2] ) 
+                    
+                if line.startswith("++ Dipole transition vectors"):
+                    flagL=False
+
+            
+            if line.startswith("++ Dipole transition vectors (spin-free states):"):
+                flagD=True
+            if flagD:
+                if line.startswith("         1    2") or line.startswith("         2    1"):
+                    words = line.split()
+                    DX = float( words[2] ) 
+                    DY = float( words[3] )
+                    DZ = float( words[4] ) 
+                    DM = float( words[5] )
+
+                if line.startswith("++ Velocity transition strengths (spin-free states):"):
+                    flagD=False
+
+            
+            if line.startswith("++ Velocity transition strengths (spin-free states):"):
+                flagV=True
+            if flagV:
+                if line.startswith("         1    2") or line.startswith("         2    1"):
+                    words = line.split()
+                    OV = float( words[2] )  
+                    break
+    log.close()
+    #if not O:
+    #    O.append(0.0)
+    #states=np.array(O).reshape(-1,3)
+    
+    return OL, OV, DM, DX, DY, DZ, E
+
+
+
+def get_geo(file):
+    GEO=[]
+    Q1=[]
+    Q2=[]
+    natoms=33
+    
+    data = re.compile(r'\s(\S+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)\s+(-?\d+?\.\d+)')
+    RASSCF=False 
+    c1=0
+
+    with open(file, "r") as log:
+        for line in log:
+
+            if line.startswith("      Header of the ONEINT file:"):
+                RASSCF=True
+            if RASSCF:
+                if data.search(line):
+                    x = float(data.search(line).group(2) ) # Get the X Coordinate
+                    GEO.append(x)
+                    y = float(data.search(line).group(3) ) # Get the Y Coordinate
+                    GEO.append(y)
+                    z = float(data.search(line).group(4) ) # Get the Z Coordinate
+                    GEO.append(z)
+                    c1=c1+1
+                    if c1 == natoms:
+                        RASSCF=False
+
+            if re.search(r"Title = ", line) is not None:
+                words = line.split()
+                q1 = float( words[3] ) 
+                q2 = float( words[5] )
+                Q1.append(q1)
+                Q2.append(q2)
+                
+    GEO=np.array(GEO).reshape(-1,3)
+    return GEO, Q1, Q2
+
+
+def center_of_mass(symb, xyz):
+
+    Hm = 1.007825037
+    Cm = 12.0107
+    Bm = 10.810
+    Nm = 14.00324100
+    Fm = 18.99840325
+
+    xcom = 0.0
+    ycom = 0.0
+    zcom = 0.0
+    mass = 0.0
+
+    COM = []
+    M = []
+    
+    for i in range(len(symb)):
+        if symb[i] == 'H':
+            com = xyz[i] * Hm
+            M.append(Hm)
+        elif symb[i] == 'B':
+            com = xyz[i] * Bm
+            M.append(Bm)
+        elif symb[i] == 'C':
+            com = xyz[i] * Cm
+            M.append(Cm)
+        elif symb[i] == 'N':
+            com = xyz[i] * Nm
+            M.append(Nm)
+        elif symb[i] == 'F':
+            com = xyz[i] * Fm
+            M.append(Fm)
+        else:
+            print("Atomic mass of %s missing" % symb[i])
+            sys.exit(1)
+        
+        COM.append(com)
+
+    
+    MW = np.array(COM).reshape(-1,3)
+    
+    COM=COM/np.sum(M)
+
+    M = np.array(M).reshape(-1,1)
+    
+    #p=np.prod(M)
+    #s=np.sum(M)
+    COMXYZ = xyz - COM
+    #print(COMXYZ)
+                 
+    return COM, MW, M
 
 
 
@@ -876,13 +1074,15 @@ def main():
     # Get Type of Run
     f.add_option('--zmatrix', action="store_true", default=False, help='Generate PES using Z-atrix coordinates')
     f.add_option('--xyz', action="store_true", default=False, help='Generate PES using cartesian XYZ coordinates')
-    f.add_option('--proj', action="store_true", default=False, help='Projection onto normal modes')
+    f.add_option('--diff', action="store_true", default=False, help='Compute the difference between two Cartesian coordinates')
     f.add_option('--get', action="store_true", default=False, help='Get the PES from OpenMolcas')
     f.add_option('--get_nm', action="store_true", default=False, help='Stuff')
     f.add_option('--getnac', action="store_true", default=False, help='Get the Non-adiabatic coupling vectors from OpenMolcas')
     f.add_option('--getnac1d', action="store_true", default=False, help='Non-adiabatic coupling vectors from SINGLE OpenMolcas log file')
     f.add_option('--getdqv', action="store_true", default=False, help='Get Diabatic potentials and coupling from DQV method on OpenMolcas')
     f.add_option('--getnacme', action="store_true", default=False, help='Get Non-Adiabatic Coupling Matrix from Molpro')
+    f.add_option('--getdm', action="store_true", default=False, help='Get oscillator strength and transition dipole moment.')
+    f.add_option('--gmatrix', action="store_true", default=False, help='Generate the G-matrix')
     
     # Get Z-matrix Coordinates
     f.add_option('-z', '--zmat', type = str, default = None, help='Give the Zmat structure')
@@ -913,12 +1113,11 @@ def main():
     # Basis set
     f.add_option('-b', '--bs' , type = str, default = 'ANO-RCC-VTZP', help='Basis set for OpenMolcas')
     # Symmetry
-    f.add_option('-c', '--sym' , type = str, default = None, help='Symmetry constrain in OpenMolcas')
+    f.add_option('-c', '--sym' , type = str, default = 'C1', help='Symmetry constrain in OpenMolcas')
     # Just movie
     f.add_option('--movie', action="store_true", default=False, help='Print just the NM movie')
     # Level of calculation
     f.add_option( '-l', '--level' , type = str, default = None, help='Level of calculation to get results, i.e., RASSCF, CASPT2...')
-    f.add_option('--diff', action="store_true", default=False, help='Compute the difference between two structures (use --proj )')
     f.add_option('--sum', action="store_true", default=False, help='Add the NM projection to the equilibrium omtry (use --proj )')
     f.add_option('--rotate', action="store_true", default=False, help='Generate PES using cartesian XYZ coordinates')
     f.add_option('--td', action="store_true", default=False, help='2D PES calculation')
@@ -927,7 +1126,7 @@ def main():
     f.add_option('--atm1' , type = str, default = None, help='Atom 1 for 1D potential ')
     f.add_option('--job' , type = str, default = None, help='Job file name ')
     f.add_option('--oldname' , action="store_true", default=False, help='Old naming for Input files ')
-    
+    f.add_option('--oldinput' , action="store_true", default=False, help='Old input writting style (To be used with Rydberg basis) ')
     (arg, args) = f.parse_args(sys.argv[1:])
 
     if len(sys.argv) == 1:
@@ -1039,8 +1238,12 @@ def main():
                             input=OldInputName(job,i,j)
                         else:
                             input=InputName(job,i,j)
-                            
+
                         WriteInput(input, arg.bs, atomnames, TdXYZ, arg.sym, Q[i], Q2[j])
+                        #if arg.oldinput == True:
+                        #    WriteInput(input, arg.bs, atomnames, TdXYZ, arg.sym, Q[i], Q2[j])
+                        #else:
+                        #    WriteXYZ(input, atomnames, TdXYZ, Q[i], Q2[j])
                 
                         job=input.replace(".input", ".sh")
                         scpt=open(job, 'w')
@@ -1067,8 +1270,14 @@ def main():
                         input=OldInputName(job,i,None)
                     else:
                         input=InputName(job,i,None)
-                    
+
+
                     WriteInput(input, arg.bs, atomnames, NewXYZ, arg.sym, Q[i], None)
+                    #if arg.oldinput == True:
+                    #    WriteInput(input, arg.bs, atomnames, NewXYZ, arg.sym, Q[i], None)
+                    #else:
+                    #    WriteXYZ(input, atomnames, NewXYZ, Q[i], None)
+
                 
                     job=input.replace(".input", ".sh")
                     scpt=open(job, 'w')
@@ -1085,7 +1294,7 @@ def main():
 
 
             
-    elif arg.proj == True:
+    elif arg.diff == True:
 
         
         eqxyz,atomnames=readxyz(arg.eq)
@@ -1095,8 +1304,10 @@ def main():
         
         diff=eqxyz-refxyz
 
+        title = "Difference between " + arg.eq + " and " + arg.ref
+        
         #if arg.diff == True:
-        print_coord(atomnames,diff)
+        print_coord(atomnames,diff,title)
         
         #c= nmxyz/diff
         #print_coord(atomnames,c)
@@ -1160,14 +1371,15 @@ def main():
         
         if arg.td == True:
 
-            Q1=np.linspace(arg.qi,arg.qf,arg.N)
-            Q2=np.linspace(arg.qi2,arg.qf2,arg.N)
-            q1=[]
-            q2=[]
-            for i in range(arg.N):
-                for j in range(arg.N):
-                    q1.append(Q1[i])
-                    q2.append(Q2[j])
+            q1,q2=get_Q_2D()
+            #Q1=np.linspace(arg.qi,arg.qf,arg.N)
+            #Q2=np.linspace(arg.qi2,arg.qf2,arg.N)
+            #q1=[]
+            #q2=[]
+            #for i in range(arg.N):
+            #    for j in range(arg.N):
+            #        q1.append(Q1[i])
+            #        q2.append(Q2[j])
         else:
             #q1=np.linspace(arg.qi,arg.qf,arg.N)
             q1=get_1D_Q()
@@ -1185,7 +1397,6 @@ def main():
                         x1.append(q1[i])
                         if arg.td == True:
                             x2.append(q2[i])
-
                             
         for i in range(len(x1)):
             print ("%.6s" % x1[i], end=' ')
@@ -1202,12 +1413,15 @@ def main():
     # GET NACs
     elif arg.getnac == True:
 
+        
         n=arg.N
         qxyz,dump=readxyz(arg.nm)
         #eqxyz, atomnames=readxyz(arg.eq)
-        
-        Q1=np.linspace(arg.qi,arg.qf,arg.N)
-        Q2=np.linspace(arg.qi2,arg.qf2,arg.N)
+
+        #Q1, Q2 = get_Q_2D()
+
+        #Q1=np.linspace(arg.qi,arg.qf,arg.N)
+        #Q2=np.linspace(arg.qi2,arg.qf2,arg.N)
 
         files=sorted(glob.iglob('*.log'))
         i=0
@@ -1215,48 +1429,47 @@ def main():
         J=0
         dgdq=2.41719
         for file in files:
-            symb,geoxyz,nacxyz,fcsf,energy=get_nac(file, arg.natoms)
+            symb,geoxyz,nacxyz,fcsf,energy,norm=get_nac(file, arg.natoms)
 
+            Q1, Q2 = get_2D_Q(file)
 
+            #print(geoxyz)
+            
             dq=0.00001
             Gdq=generate_coord(geoxyz, qxyz, dq)
             dq2=-0.00001
             Gdq2=generate_coord(geoxyz, qxyz, dq2)
             
-            #print(np.array(geoxyz))
-            #print(np.array(Gdq))
 
-            #dgdq=(Gdq-geoxyz)/dq
-            #dgdq2=(np.array(Gdq)-np.array(Gdq2))/(2*dq)
-            #print(nacxyz)
+
+            dgdq=(Gdq-geoxyz)/dq
+            dgdq2=(np.array(Gdq)-np.array(Gdq2))/(2*dq)
+            
             #nacme=np.sum(nacxyz)
-            #nacme2=np.sum(dgdq2*nacxyz)
+            nacme2=np.sum(dgdq*nacxyz)
+            
+
             #dd=dgdq*nacxyz
-            #print(nacxyz)
-            #nacme=np.sum(nacxyz)
+            #print(dgdq)
+            
+            ##nacme=np.sum(nacxyz)
             #h=(nacxyz-fcsf)*energy
             #nacme=np.sum(dgdq*h)
+
             
-            #print(file, nacxyz)
-            #print(fcsf)
-
-            #print (file, end=' ')
-
-
-            #print(np.sum(nacxyz))
+            print ("%.6s" % Q1[0], end=' ')
+            print ("%.6s" % Q2[0], end='  ')
             
-            print ("%.6s" % Q1[i], end=' ')
-            print ("%.6s" % Q2[j], end='  ')
-            #print(nacme, end=' ')
-            print(abs(np.sum(nacxyz)), end=' ')
+            print(abs(nacme2), end='  ')
+            #print(abs(np.sum(h)), end=' ')
+            #print("%.8E" % abs(energy), end=' ')
+            #print(nacxyz, end=' ')
+            #print(abs(1/np.sum(nacxyz)), end=' ')
             print(' ')
 
-            
-            
-            j=j+1
-            if j == arg.N:
-                j=0
-                i=i+1
+            i=i+1
+            if i == arg.N:
+                i=0
                 print(' ')
 
     # GET NACME FROM OPENMOLCAS 
@@ -1289,10 +1502,38 @@ def main():
         if arg.log:
             log=arg.log
             natoms=2
-            nD=diatomic
-            R, Q1, Q2, E, DC = get_dqv(log, natoms,nD)
+            nD="diatomic"
+            R, Q1, Q2, E, RM, W = get_dqv(log, natoms,nD)
 
-            dipole=get_dipole(log)
+            OSL, OSV, TDM, DX, DY, DZ=get_dipole(log)
+            
+            MTDM= np.array([[0,TDM],[TDM,0]])
+            IRM=np.linalg.inv(RM)
+            DTDM1=MTDM*IRM
+            DTDM=DTDM1*RM
+            
+            MDX= np.array([[0,DX],[DX,0]])
+            DDX1=MDX*IRM
+            DDX=DDX1*RM
+            
+            MDY= np.array([[0,DY],[DY,0]])
+            DDY1=MDY*IRM
+            DDY=DDY1*RM
+
+            MDZ= np.array([[0,DZ],[DZ,0]])
+            DDZ1=MDZ*IRM
+            DDZ=DDZ1*RM
+
+            NEWTDM=math.sqrt(DDX[0][1]**2+DDY[0][1]**2+DDZ[0][1]**2)
+            
+
+            
+            print(RM)
+            print(abs(DTDM[0][1]))
+            print(NEWTDM)
+
+
+            #dipole=get_dipole(log)
             
             pot=log.replace(".log", "-diab.pes.dat")
             out=open(pot,"w")
@@ -1306,15 +1547,15 @@ def main():
             out.write("# QDV Couplings elements U12 \n")    
             for i in range(len(R)):   
                 #out.write("%.4s %.16s \n" % (R[i], DC[i][1]**2 ))
-                out.write("%.4s %.16s \n" % (R[i], E[i][1]**2 ))
+                out.write("%.4s %.16E \n" % (R[i], E[i][1]**2 ))
             out.close()
 
-            dip=log.replace(".log", "-dipoles.dat")
-            out=open(dip,"w")
-            out.write("# Transitions dipole moment \n")    
-            for i in range(len(R)):   
-                out.write("%.4s %.16s \n" % (R[i], dipole[i]))
-            out.close()           
+            #dip=log.replace(".log", "-dipoles.dat")
+            #out=open(dip,"w")
+            #out.write("# Transitions dipole moment \n")    
+            #for i in range(len(R)):   
+            #    out.write("%.4s %.16s \n" % (R[i], dipole[i]))
+            #out.close()           
             
         elif arg.td:
             nD = 2
@@ -1328,10 +1569,15 @@ def main():
             tdmpot=open("tdm-surf.dat", "w")
             
             for log in files:
-                R,  Q1, Q2, E, DC = get_dqv(log, natoms, nD)
-                TDM=get_dipole(log)
+                R,  Q1, Q2, E, RM, W = get_dqv(log, natoms, nD)
+                OSL, OSV, TDM, DX, DY, DZ=get_dipole(log)
+
+                MTDM= np.array([[0,TDM],[TDM,0]])
+                IRM=np.linalg.inv(RM)
+                DTDM1=MTDM*IRM
+                DTDM=DTDM1*RM
                 
-                if DC.any():
+                if E.any():
 
                     if Q1[0] != q1:
                         gspot.write('\n')
@@ -1339,10 +1585,10 @@ def main():
                         dcpot.write('\n')
                         tdmpot.write('\n')
                         
-                    gspot.write("%.8s %.8s %.16s \n" % (Q1[0], Q2[0], E[0][0]))
-                    s1pot.write("%.8s %.8s %.16s \n" % (Q1[0], Q2[0], E[0][3]))
-                    dcpot.write("%.8s %.8s %.6E \n " % (Q1[0], Q2[0], abs(1/DC[0][1]) ))
-                    tdmpot.write("%.8s %.8s %.16s \n" % (Q1[0], Q2[0], TDM[0]))
+                    gspot.write("%.8s %.8s %.16s \n" %  (Q1[0], Q2[0], E[0][0]  ))
+                    s1pot.write("%.8s %.8s %.16s \n" %  (Q1[0], Q2[0], E[0][3]  ))
+                    dcpot.write("%.8s %.8s %.6E \n " %  (Q1[0], Q2[0], abs(1/E[0][1]) ))
+                    tdmpot.write("%.8s %.8s %.8E \n" % (Q1[0], Q2[0], abs(DTDM[0][1])  ))
                     
                     q1=Q1[0]
             gspot.close()
@@ -1352,7 +1598,7 @@ def main():
             
         else:
             nD = 1
-            natoms = 4
+            natoms = 2
             files=sorted(glob.iglob('*.log'))
             
             gspot=open("gs-surf.dat", "w")
@@ -1361,44 +1607,164 @@ def main():
             tdmpot=open("tdm-surf.dat", "w")
             
             for log in files:
-                R,  Q, Q2, E, DC = get_dqv(log, natoms, nD)
-                TDM=get_dipole(log)
+                R,  Q, Q2, E, RM, W = get_dqv(log, natoms, nD)
+                OSL, OSV, TDM, DX, DY, DZ=get_dipole(log)
+                #TDM=OSV
+                MTDM= np.array([[0,OSV],[OSV,0]])
+                IRM=np.linalg.inv(RM)
+                DTDM1=MTDM*IRM
+                DTDM=DTDM1*RM
                 
-                if DC.any():
-                    gspot.write("%.8s  %.16s \n" % (Q[0], E[0][0]))
-                    s1pot.write("%.8s  %.16s \n" % (Q[0], E[0][3]))
-                    dcpot.write("%.8s  %.6E \n " % (Q[0], abs(1/DC[0][1]) ))
-                    tdmpot.write("%.8s %.16s \n" % (Q[0], TDM[0]))
+                if E.any():
+                    gspot.write("%.8s  %.16s \n" % (Q[0], E[0][0]) )
+                    s1pot.write("%.8s  %.16s \n" % (Q[0], E[0][3]) )
+                    dcpot.write("%.8s  %.6E \n " % (Q[0], 1/E[0][1]**2 ) )
+
+                    tdmpot.write("%.8s %.16s \n" % (Q[0], abs(DTDM[0][1]))  )
+                    #tdmpot.write("%.8s %.16s \n" % (Q[0], OSV )  )
                     
             gspot.close()
             s1pot.close()
             dcpot.close()
             tdmpot.close()
-
-            
                     
     elif arg.getdm == True:
         nD = 2
         natoms = 2
         files=sorted(glob.iglob('*.log'))
-        q1=0
-        
-        tdmpot=open("tdm-surf.dat", "w")
-        
-        for log in files:
-            Q1, Q2 = get_dqv()
-            
-            TDM=get_dipole(log)
-        
-            if DC.any():
+        qmark=0
 
-                if Q1[0] != q1:
-                    tdmpot.write('\n')
+        osclen=open("osc-len-surf.dat", "w")
+        oscvel=open("osc-vel-surf.dat", "w")
+        tdmlen=open("tdm-len-surf.dat", "w")
+        tdmvel=open("tdm-vel-surf.dat", "w")
+
+        for log in files:
+
+            # Get Q
+            if arg.td == True:
+                Q, Q2 = get_2D_Q(log)
+            else:
+                Q = get_Q_1D(log)
+
+            # Get Oscillator/TDM
+            OSL, OSV, TDM, DX, DY, DZ, E = get_dipole(log)
+
+            #energy=get_energy("RASSI", "2")
+
+            # Following OpenMolcas manual (Sec. 5.1.5.1.5, p.587)
+            ediff=abs(E[1]-E[0])
+            VTDM = math.sqrt( 1.5 * (OSV/ediff) )
+           
+            # Write 2D surfaces
+            if arg.td == True:
+                if Q[0] != q1:
+                    osclen.write('\n')
+                    oscvel.write('\n')
+                    tdmlen.write('\n')
+                    tdmvel.write('\n')
                     
-                    tdmpot.write("%.8s %.8s %.16s \n" % (Q1[0], Q2[0], TDM[0]))
-                    
-                    q1=Q1[0]
-                tdmpot.close()
-                    
+                osclen.write("%.8s  %.8s  %.16s \n" % (Q[0], Q2[0], OSL) )
+                oscvel.write("%.8s  %.8s  %.16s \n" % (Q[0], Q2[0], OSV) )
+                tdmlen.write("%.8s  %.8s  %.16s \n" % (Q[0], Q2[0], TDM) )
+                tdmvel.write("%.8s  %.8s  %.16s \n" % (Q[0], Q2[0], VTDM) )
+                q1=Q[0]
+                
+            # Write 1D surfaces
+            else:
+                osclen.write("%.8s %.16s \n" % (Q[0], OSL) )
+                oscvel.write("%.8s %.16s \n" % (Q[0], OSV) )
+                tdmlen.write("%.8s %.16s \n" % (Q[0], TDM) )
+                tdmvel.write("%.8s %.16s \n" % (Q[0], VTDM) )
+            
+        osclen.close()
+        oscvel.close()
+        tdmlen.close()
+        tdmvel.close()
+
+
+    elif arg.gmatrix == True:
+        q1,symb=readxyz(arg.nm)
+        q2,dump=readxyz(arg.nm2)
+
+        g11out=open("g11.dat", "w")
+        g12out=open("g12.dat", "w")
+        g22out=open("g22.dat", "w")
+        deriv=open("derivative.dat", "w")
+        qmark=0.0
+        
+        files=sorted(glob.iglob('*.log'))
+        for log in files:
+            
+            geo, Q1, Q2 = get_geo(log)
+            
+            COM, MWgeo, M = center_of_mass(symb, geo)
+                
+            geoCOM = geo - COM
+            q1COM  =  q1 - COM
+            q2COM  =  q2 - COM
+            
+            #geoCOM = geo 
+            #q1COM  =  q1 
+            #q2COM  =  q2 
+            
+            ### DERIVATIVES
+            # Foward
+            dQf =  0.0001
+            # Backward
+            dQb = -0.0001
+
+            ### Q1 derivatives
+            #
+            dXdQf=generate_coord(geoCOM, q1COM, dQf)
+            dXdQb=generate_coord(geoCOM, q1COM, dQb)
+
+            # Foward diference derivative
+            FdXdQ1=(dXdQf-geoCOM)/dQf
+            # Central diference derivative
+            CdXdQ1=(np.array(dXdQf)-np.array(dXdQb))/(2*dQf)
+
+            ### Q2 derivatives
+            # 
+            dXdQf=generate_coord(geoCOM, q2COM, dQf)
+            dXdQb=generate_coord(geoCOM, q2COM, dQb)
+
+            # Foward diference derivative
+            FdXdQ2=(dXdQf-geoCOM)/dQf
+            # Central diference derivative
+            CdXdQ2=(np.array(dXdQf)-np.array(dXdQb))/(2*dQf)
+            
+            ### Compute the G-matrix
+            G11 = np.sum(M*CdXdQ1*CdXdQ1)
+            G12 = np.sum(M*CdXdQ1*CdXdQ2)
+            G22 = np.sum(M*CdXdQ2*CdXdQ2)
+            
+            # Print G-matrix to file
+            if Q1[0] != qmark:
+                g11out.write('\n')
+                g12out.write('\n')
+                g22out.write('\n')
+                deriv.write('\n')
+                
+            g11out.write("%.8s  %.8s  %.16s \n" % (Q1[0], Q2[0], 1/G11) )
+            g12out.write("%.8s  %.8s  %.16s \n" % (Q1[0], Q2[0], 1/G12) )
+            g22out.write("%.8s  %.8s  %.16s \n" % (Q1[0], Q2[0], 1/G22) )
+            deriv.write("%.8s  %.8s  %.16s \n" % (Q1[0], Q2[0], np.sum(CdXdQ2)) )
+
+            qmark = Q1[0]
+            
+        g11out.close()
+        g12out.close()
+        g22out.close()
+            #print(Q1, Q2, np.sum(FdXdQ1*FdXdQ2))
+
+            
+            
+            #print_coord(symb,mol, "Geometry at COM")
+            
+            #print(mwq2)
+
+            #print (eqxyz-mweq)
+        
 if __name__=="__main__":
     main()
