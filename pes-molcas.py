@@ -3,6 +3,7 @@
 ###!/usr/bin/env nix-shell
 ###!nix-shell -i python -p "python37.withPackages(ps: with ps; [ numpy toolz matplotlib])"
 
+import copy
 import math, re, optparse, operator, os, glob
 import numpy as np
 import matplotlib.pyplot as plt
@@ -29,6 +30,20 @@ def load(file):
         except ValueError:
             pass
     return (np.array(r), np.array(a), np.array(d)) 
+
+def readpes(file):
+    f = open(file, 'r')
+    a = []
+    for l in f.readlines():
+        try:
+            n = list(map(float,l.replace(',',' ').split()))
+            if len(n)>0:
+                a.append(n)
+        except ValueError:
+            pass
+    f.close()
+    return np.array(a)
+
 
 def readxyz(filename):
     xyzf = open(filename, 'r')
@@ -1015,16 +1030,17 @@ def get_geo(file):
 
 def center_of_mass(symb, xyz):
 
-    Hm = 1.007825037
-    Cm = 12.0107
-    Bm = 10.810
-    Nm = 14.00324100
-    Fm = 18.99840325
-
-    xcom = 0.0
-    ycom = 0.0
-    zcom = 0.0
-    mass = 0.0
+    #Hm = 1.007825037 #(amu)
+    Hm = (1.673523708E-27)/(9.10939E-31)
+    #Cm = 12.0107 #(amu)
+    Cm =(1.994412767E-26)/(9.10939E-31)
+    #Bm = 10.810 #(amu)
+    Bm = (1.79503293E-26)/(9.10939E-31)
+    #Nm = 14.00324100 #(amu)
+    Nm = (2.325280177E-26)/(9.10939E-31)
+    #Fm = 18.99840325 #(amu)
+    Fm = (3.154741854E-26)/(9.10939E-31)
+    
 
     COM = []
     M = []
@@ -1048,30 +1064,231 @@ def center_of_mass(symb, xyz):
         else:
             print("Atomic mass of %s missing" % symb[i])
             sys.exit(1)
-        
         COM.append(com)
 
-    
     MW = np.array(COM).reshape(-1,3)
-    
     COM=COM/np.sum(M)
-
     M = np.array(M).reshape(-1,1)
     
-    #p=np.prod(M)
-    #s=np.sum(M)
-    COMXYZ = xyz - COM
-    #print(COMXYZ)
-                 
     return COM, MW, M
 
+
+def reduced_mass(symb, xyz):
+
+    #Hm = 1.007825037 (amu)
+    Hm = (1.673523708E-27)/(9.10939E-31)
+    #Cm = 12.0107 (amu)
+    Cm =(1.994412767E-26)/(9.10939E-31)
+    #Bm = 10.810 (amu)
+    Bm = (1.79503293E-26)/(9.10939E-31)
+    #Nm = 14.00324100 (amu)
+    Nm = (2.325280177E-26)/(9.10939E-31)
+    #Fm = 18.99840325 (amu)
+    Fm = (3.154741854E-26)/(9.10939E-31)
+
+    RM = []
+
+    xyz=xyz*1.88973
+    
+    for i in range(len(symb)):
+        if symb[i] == 'H':
+            t=((xyz[i][0]**2)/Hm) + ((xyz[i][1]**2)/Hm)  + ((xyz[i][2]**2)/Hm) 
+        elif symb[i] == 'B':
+            t=((xyz[i][0]**2)/Bm) + ((xyz[i][1]**2)/Bm)  + ((xyz[i][2]**2)/Bm) 
+        elif symb[i] == 'C':
+            t=((xyz[i][0]**2)/Cm) + ((xyz[i][1]**2)/Cm)  + ((xyz[i][2]**2)/Cm) 
+        elif symb[i] == 'N':
+            t=((xyz[i][0]**2)/Nm) + ((xyz[i][1]**2)/Nm)  + ((xyz[i][2]**2)/Nm) 
+        elif symb[i] == 'F':
+            t=((xyz[i][0]**2)/Fm) + ((xyz[i][1]**2)/Fm)  + ((xyz[i][2]**2)/Fm) 
+        else:
+            print("Atomic mass of %s missing" % symb[i])
+            sys.exit(1)
+        RM.append(t)
+    MASS=np.sum(RM)
+    
+    return MASS
+
+
+def kabsch(P, Q):
+    """
+    Using the Kabsch algorithm with two sets of paired point P and Q, centered
+    around the centroid. Each vector set is represented as an NxD
+    matrix, where D is the the dimension of the space.
+    The algorithm works in three steps:
+    - a centroid translation of P and Q (assumed done before this function
+      call)
+    - the computation of a covariance matrix C
+    - computation of the optimal rotation matrix U
+    For more info see http://en.wikipedia.org/wiki/Kabsch_algorithm
+    Parameters
+    ----------
+    P : array
+        (N,D) matrix, where N is points and D is dimension.
+    Q : array
+        (N,D) matrix, where N is points and D is dimension.
+    Returns
+    -------
+    U : matrix
+        Rotation matrix (D,D)
+    """
+
+    # Computation of the covariance matrix
+    C = np.dot(np.transpose(P), Q)
+
+    # Computation of the optimal rotation matrix
+    # This can be done using singular value decomposition (SVD)
+    # Getting the sign of the det(V)*(W) to decide
+    # whether we need to correct our rotation matrix to ensure a
+    # right-handed coordinate system.
+    # And finally calculating the optimal rotation matrix U
+    # see http://en.wikipedia.org/wiki/Kabsch_algorithm
+    V, S, W = np.linalg.svd(C)
+    d = (np.linalg.det(V) * np.linalg.det(W)) < 0.0
+
+    if d:
+        S[-1] = -S[-1]
+        V[:, -1] = -V[:, -1]
+
+    # Create Rotation matrix U
+    U = np.dot(V, W)
+
+    return U
+
+
+def centroid(X):
+    """
+    Centroid is the mean position of all the points in all of the coordinate
+    directions, from a vectorset X.
+
+    https://en.wikipedia.org/wiki/Centroid
+
+    C = sum(X)/len(X)
+
+    Parameters
+    ----------
+    X : array
+        (N,D) matrix, where N is points and D is dimension.
+
+    Returns
+    -------
+    C : float
+        centroid
+    """
+    C = X.mean(axis=0)
+    return C
+
+def rmsd(V, W):
+    """
+    Calculate Root-mean-square deviation from two sets of vectors V and W.
+
+    Parameters
+    ----------
+    V : array
+        (N,D) matrix, where N is points and D is dimension.
+    W : array
+        (N,D) matrix, where N is points and D is dimension.
+
+    Returns
+    -------
+    rmsd : float
+        Root-mean-square deviation between the two vectors
+    """
+    diff = np.array(V) - np.array(W)
+    N = len(V)
+    return np.sqrt((diff * diff).sum() / N)
+
+
+def kabsch_rmsd(P, Q, W=None, translate=False):
+    """
+    Rotate matrix P unto Q using Kabsch algorithm and calculate the RMSD.
+    An optional vector of weights W may be provided.
+
+    Parameters
+    ----------
+    P : array
+        (N,D) matrix, where N is points and D is dimension.
+    Q : array
+        (N,D) matrix, where N is points and D is dimension.
+    W : array or None
+        (N) vector, where N is points.
+    translate : bool
+        Use centroids to translate vector P and Q unto each other.
+
+    Returns
+    -------
+    rmsd : float
+        root-mean squared deviation
+    """
+
+    if translate:
+        Q = Q - centroid(Q)
+        P = P - centroid(P)
+
+    if W is not None:
+        return kabsch_weighted_rmsd(P, Q, W)
+
+    P = kabsch_rotate(P, Q)
+    return rmsd(P, Q)
+
+def kabsch_rotate(P, Q):
+    """
+    Rotate matrix P unto matrix Q using Kabsch algorithm.
+
+    Parameters
+    ----------
+    P : array
+        (N,D) matrix, where N is points and D is dimension.
+    Q : array
+        (N,D) matrix, where N is points and D is dimension.
+
+    Returns
+    -------
+    P : array
+        (N,D) matrix, where N is points and D is dimension,
+        rotated
+
+    """
+    U = kabsch(P, Q)
+
+    # Rotate P
+    P = np.dot(P, U)
+    return P
+
+def align_struct(p_all, q_all):
+    """
+    Calculate Root-mean-square deviation (RMSD) between structure A and B, in XYZ, 
+    using transformation and rotation.
+
+    For more information, usage, example and citation read more at
+    https://github.com/charnley/rmsd
+    """
+    p_coord = copy.deepcopy(p_all)
+    q_coord = copy.deepcopy(q_all)
+    
+    p_cent = centroid(p_coord)
+    q_cent = centroid(q_coord)
+    p_coord -= p_cent
+    q_coord -= q_cent
+    
+    # Get rotation matrix
+    U = kabsch(q_coord, p_coord)
+    q_all -= q_cent
+    q_all = np.dot(q_all, U)
+    
+    # center q on p's original coordinates
+    q_all += p_cent
+
+    result_rmsd = kabsch_rmsd(p_coord, q_coord)
+    
+    return q_all, result_rmsd
 
 
 # MAIN PROGRAM
 def main():
     import sys
     f = optparse.OptionParser(usage="usage: %prog [options] filename")
-    # Get Type of Run
+    # Main modules
     f.add_option('--zmatrix', action="store_true", default=False, help='Generate PES using Z-atrix coordinates')
     f.add_option('--xyz', action="store_true", default=False, help='Generate PES using cartesian XYZ coordinates')
     f.add_option('--diff', action="store_true", default=False, help='Compute the difference between two Cartesian coordinates')
@@ -1082,8 +1299,11 @@ def main():
     f.add_option('--getdqv', action="store_true", default=False, help='Get Diabatic potentials and coupling from DQV method on OpenMolcas')
     f.add_option('--getnacme', action="store_true", default=False, help='Get Non-Adiabatic Coupling Matrix from Molpro')
     f.add_option('--getdm', action="store_true", default=False, help='Get oscillator strength and transition dipole moment.')
-    f.add_option('--gmatrix', action="store_true", default=False, help='Generate the G-matrix')
-    
+    f.add_option('--gmatrix', action="store_true", default=False, help='Create the G-matrix')
+    f.add_option('--shiftpes', action="store_true", default=False, help='Shift the PES surfaces to the minium of GS')
+    f.add_option('--plotpes', action="store_true", default=False, help='Fix Matlab PES')
+
+    ### Variables
     # Get Z-matrix Coordinates
     f.add_option('-z', '--zmat', type = str, default = None, help='Give the Zmat structure')
     # Get Normal Coordinates
@@ -1127,6 +1347,8 @@ def main():
     f.add_option('--job' , type = str, default = None, help='Job file name ')
     f.add_option('--oldname' , action="store_true", default=False, help='Old naming for Input files ')
     f.add_option('--oldinput' , action="store_true", default=False, help='Old input writting style (To be used with Rydberg basis) ')
+    f.add_option('--pes' , type = str, default = None, help='PES file name ')
+    
     (arg, args) = f.parse_args(sys.argv[1:])
 
     if len(sys.argv) == 1:
@@ -1682,89 +1904,161 @@ def main():
         tdmlen.close()
         tdmvel.close()
 
-
+    ########################
+    # CALCULATE THE G-MATRIX
     elif arg.gmatrix == True:
+
+        # Read Q1 and Q2 files
         q1,symb=readxyz(arg.nm)
         q2,dump=readxyz(arg.nm2)
-
-        g11out=open("g11.dat", "w")
-        g12out=open("g12.dat", "w")
-        g22out=open("g22.dat", "w")
-        deriv=open("derivative.dat", "w")
-        qmark=0.0
         
+        #Name the output files
+        g11out=open("g11-au.dat", "w")
+        g12out=open("g12-au.dat", "w")
+        g22out=open("g22-au.dat", "w")
+
+        # Marker
+        qmark=0.0
+
+        # Loop over all .log files
         files=sorted(glob.iglob('*.log'))
         for log in files:
             
+            # Get geometry from log file
             geo, Q1, Q2 = get_geo(log)
-            
+
+            # Compute the centrer of mass of geometry
             COM, MWgeo, M = center_of_mass(symb, geo)
-                
+
+            # Move geometry, Q1 and Q2 to center of mass
             geoCOM = geo - COM
-            q1COM  =  q1 - COM
-            q2COM  =  q2 - COM
-            
-            #geoCOM = geo 
-            #q1COM  =  q1 
-            #q2COM  =  q2 
-            
+            q1COM  = q1 - COM
+            q2COM  = q2 - COM
+
             ### DERIVATIVES
             # Foward
-            dQf =  0.0001
+            dQf = 1e-9
             # Backward
-            dQb = -0.0001
-
-            ### Q1 derivatives
-            #
-            dXdQf=generate_coord(geoCOM, q1COM, dQf)
-            dXdQb=generate_coord(geoCOM, q1COM, dQb)
-
-            # Foward diference derivative
-            FdXdQ1=(dXdQf-geoCOM)/dQf
-            # Central diference derivative
-            CdXdQ1=(np.array(dXdQf)-np.array(dXdQb))/(2*dQf)
-
-            ### Q2 derivatives
-            # 
-            dXdQf=generate_coord(geoCOM, q2COM, dQf)
-            dXdQb=generate_coord(geoCOM, q2COM, dQb)
-
-            # Foward diference derivative
-            FdXdQ2=(dXdQf-geoCOM)/dQf
-            # Central diference derivative
-            CdXdQ2=(np.array(dXdQf)-np.array(dXdQb))/(2*dQf)
+            dQb = -1e-9
             
-            ### Compute the G-matrix
+            ### Set up for Q1 derivatives
+            # generate sligthly distorted molecule
+            dXdQ1f=generate_coord(geoCOM, q1COM, dQf)
+            dXdQ1b=generate_coord(geoCOM, q1COM, dQb)
+            # Align structures
+            dXdQ1f, rmsd = align_struct(np.array(geoCOM), np.array(dXdQ1f))
+            dXdQ1b, rmsd = align_struct(np.array(geoCOM), np.array(dXdQ1b))
+            
+            ### Set up for Q2 derivatives
+            # generate sligthly distorted molecule
+            dXdQ2f=generate_coord(geoCOM, q2COM, dQf)
+            dXdQ2b=generate_coord(geoCOM, q2COM, dQb)
+            # Align structures
+            dXdQ2f, rmsd = align_struct(np.array(geoCOM), np.array(dXdQ2f))
+            dXdQ2b, rmsd = align_struct(np.array(geoCOM), np.array(dXdQ2b))
+
+            # Convert coordinates to Bohr
+            geoCOM = geoCOM*1.889725989
+            dXdQ1f = dXdQ1f*1.889725989
+            dXdQ1b = dXdQ1b*1.889725989
+            dXdQ2f = dXdQ2f*1.889725989
+            dXdQ2b = dXdQ2b*1.889725989
+            dQf = dQf*1.889725989
+            dQb = dQb*1.889725989
+
+            ## Q1 Derivatives
+            # Foward diference derivative
+            FdXdQ1=(dXdQ1f-geoCOM)/dQf
+            # Central diference derivative
+            CdXdQ1=(np.array(dXdQ1f)-np.array(dXdQ1b))/(2*dQf)
+
+            ## Q2
+            # Foward diference derivative
+            FdXdQ2=(dXdQ2f-geoCOM)/dQf
+            # Central diference derivative
+            CdXdQ2=(np.array(dXdQ2f)-np.array(dXdQ2b))/(2*dQf)
+            
+            # Compute the G-matrix elements
             G11 = np.sum(M*CdXdQ1*CdXdQ1)
             G12 = np.sum(M*CdXdQ1*CdXdQ2)
             G22 = np.sum(M*CdXdQ2*CdXdQ2)
+            
+            # Build the matrix G_{rs}
+            gmatrix=np.array([[G11,G12],[G12,G22]])
+            
+            # Invert the matrix to get G^{rs}
+            Igmatrix=np.linalg.inv(gmatrix)
             
             # Print G-matrix to file
             if Q1[0] != qmark:
                 g11out.write('\n')
                 g12out.write('\n')
                 g22out.write('\n')
-                deriv.write('\n')
-                
-            g11out.write("%.8s  %.8s  %.16s \n" % (Q1[0], Q2[0], 1/G11) )
-            g12out.write("%.8s  %.8s  %.16s \n" % (Q1[0], Q2[0], 1/G12) )
-            g22out.write("%.8s  %.8s  %.16s \n" % (Q1[0], Q2[0], 1/G22) )
-            deriv.write("%.8s  %.8s  %.16s \n" % (Q1[0], Q2[0], np.sum(CdXdQ2)) )
+            g11out.write("%.8s  %.8s  %.16E \n" % (Q1[0], Q2[0], Igmatrix[0][0]) )
+            g12out.write("%.8s  %.8s  %.16E \n" % (Q1[0], Q2[0], Igmatrix[1][0]) )
+            g22out.write("%.8s  %.8s  %.16E \n" % (Q1[0], Q2[0], Igmatrix[1][1]) )
 
             qmark = Q1[0]
-            
+
         g11out.close()
         g12out.close()
         g22out.close()
-            #print(Q1, Q2, np.sum(FdXdQ1*FdXdQ2))
 
-            
-            
-            #print_coord(symb,mol, "Geometry at COM")
-            
-            #print(mwq2)
+        
+    # Shift 2D PES to minimum
+    elif arg.shiftpes == True:
 
-            #print (eqxyz-mweq)
+        surf=arg.pes
+        
+        pes = readpes(surf)
+        
+        Q1 = pes[:,0]
+        Q2 = pes[:,1]
+        E  = pes[:,2]
+  
+        Emin = min(float(s) for s in E)
+
+        
+        shifted=surf.replace(".pot", "-shifted.pot")
+        shifted2=surf.replace(".pot", "-shifted-Z.pot")
+        z=open(shifted2, "w")
+        out=open(shifted, "w")
+
+        qmark = 0.0
+        for i in range(len(E)):
+            if Q1[i] != qmark:
+                out.write('\n')
+            #print(E[i]-Emin)
+            out.write("%.8s  %.8s  %.16E \n" % (Q1[i], Q2[i], E[i]-Emin ) )
+            z.write(" %.16E \n" % ( E[i]-Emin ) )
+            qmark = Q1[i] 
+
+
+        
+            
+
+    elif arg.plotpes == True:
+
+        surf=arg.pes
+        
+        pes = readpes(surf)
+        
+        Q1 = pes[:,0]
+        Q2 = pes[:,1]
+        E  = pes[:,2]
+  
+
+        
+        shifted=surf.replace(".pot", "-fixed.pot")
+        out=open(shifted, "w")
+
+        qmark = 0.0
+        for i in range(len(E)):
+            if Q2[i] != qmark:
+                out.write('\n')
+            out.write("%.8s  %.8s  %.16E \n" % (Q2[i], Q1[i], E[i] ) )
+            qmark = Q2[i] 
+
         
 if __name__=="__main__":
     main()
